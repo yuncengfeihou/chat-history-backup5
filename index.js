@@ -22,7 +22,7 @@ import {
     scrollChatToBottom,     // 用于滚动到底部
     updateChatMetadata,     // 用于更新聊天元数据
     saveChatConditional,    // 用于保存聊天
-    saveChat,
+    saveChat,               // 用于插件强制保存聊天
     characters,             // 需要访问角色列表来查找索引
     getThumbnailUrl,        // 可能需要获取头像URL（虽然备份里应该有）
     // --- 其他可能需要的函数 ---
