@@ -817,7 +817,6 @@ async function restoreBackup(backupData) {
 
         // --- 结束 ---
         console.log('[聊天自动备份] 恢复流程完成 (强制保存请求已发送)');
-        toastr.success('聊天记录已恢复 (强制保存)');
         return true;
 
     } catch (error) {
