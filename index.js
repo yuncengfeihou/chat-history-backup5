@@ -2,7 +2,7 @@
 // 主要功能：
 // 1. 自动保存最近聊天记录到IndexedDB (基于事件触发, 区分立即与防抖)
 // 2. 在插件页面显示保存的记录
-// 3. 提供恢复功能，将保存的聊天记录恢复到新的聊天中
+// 3. 提供恢复功能，将保存的聊天记录恢复到新的聊天中F
 // 4. 使用Web Worker优化深拷贝性能
 
 import {
@@ -755,21 +755,29 @@ async function restoreBackup(backupData) {
 
 
         // 6. 显式更新 UI
-        // ...
         logDebug('开始更新聊天界面UI');
         await printMessages();
         scrollChatToBottom();
         logDebug('聊天界面UI已更新');
 
-        // 7. 保存恢复的聊天状态
-        // ...
+        // --- 新增步骤：移除恢复的 integrity UUID ---
+        // 在保存之前，检查并移除从备份恢复的 integrity UUID
+        // 这样 saveChat 流程会为这个新创建的聊天文件生成或关联正确的 UUID
+        if (newContext.chat_metadata && newContext.chat_metadata.integrity) {
+            logDebug(`移除恢复的 integrity UUID (${newContext.chat_metadata.integrity})，以便为新聊天生成/关联正确的UUID`);
+            delete newContext.chat_metadata.integrity;
+            // 注意：我们直接修改了 newContext 中的对象，saveChatConditional 应该会读取到这个修改后的状态。
+            // 如果 updateChatMetadata 是必需的，可以调用 updateChatMetadata(newContext.chat_metadata, false);
+        }
+        // --- 结束新增步骤 ---
+
+        // 7. 保存恢复的聊天状态 (现在应该不会触发完整性检查了)
         logDebug('保存恢复后的聊天状态');
-        await saveChatConditional();
+        await saveChatConditional(); // 调用导入的函数
         logDebug('聊天状态已保存');
 
         // 8. 触发其他相关事件
         eventSource.emit(event_types.CHAT_CHANGED, newContext.chatId);
-
 
         console.log('[聊天自动备份] 聊天恢复成功');
         toastr.success('聊天记录已成功恢复到新聊天');
