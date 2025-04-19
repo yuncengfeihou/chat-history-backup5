@@ -659,7 +659,6 @@ async function restoreBackup(backupData) {
             if (isGroup) { /* ... */ }
             else {
                 targetCharIndex = parseInt(entityId, 10);
-                if (/*... 验证索引 ...*/) throw new Error(/*...*/);
                 logDebug(`切换到角色索引: ${targetCharIndex}`);
                 await selectCharacterById(targetCharIndex, { switchMenu: false });
             }
