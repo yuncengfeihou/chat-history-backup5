@@ -679,7 +679,6 @@ async function restoreBackup(backupData) {
         const currentRestoredKey = getCurrentChatKey();
         const expectedIndex = isGroup ? -1 : targetCharIndex;
         const currentIndex = isGroup ? -1 : parseInt(newContext.characterId, 10);
-        if (/*... 验证失败 ...*/) { /* ... */ return false; }
         logDebug(`上下文已确认: ${currentRestoredKey}`);
 
         // 4. 恢复聊天内容 (不变)
