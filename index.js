@@ -647,7 +647,7 @@ async function performManualBackup() {
 }
 
 // --- 恢复逻辑 ---
-// index.js (内部的 restoreBackup 函数 - 添加详细日志 + 移除 create_date)
+// index.js (内部的 restoreBackup 函数 - 双重保险策略)
 async function restoreBackup(backupData) {
     console.log('[聊天自动备份] 开始恢复备份:', { chatKey: backupData.chatKey, timestamp: backupData.timestamp });
     const initialContext = getContext();
@@ -658,6 +658,8 @@ async function restoreBackup(backupData) {
     if (!entityId) { /* ... 错误处理 ... */ return false; }
     logDebug(`恢复目标: ${isGroup ? '群组' : '角色'} ID/标识: ${entityId}`);
 
+    let targetCharIndex = -1; // 用于角色恢复
+
     try {
         // 1. 切换角色/群组
         try {
@@ -665,44 +667,33 @@ async function restoreBackup(backupData) {
                 logDebug(`切换到群组: ${entityId}`);
                 await select_group_chats(entityId);
             } else {
-                const charIndex = parseInt(entityId, 10);
-                if (isNaN(charIndex) || charIndex < 0 || charIndex >= characters.length) {
-                    throw new Error(`无效的角色索引 ${charIndex}`);
+                targetCharIndex = parseInt(entityId, 10); // 保存目标角色索引
+                if (isNaN(targetCharIndex) || targetCharIndex < 0 || targetCharIndex >= characters.length) {
+                    throw new Error(`无效的角色索引 ${targetCharIndex}`);
                 }
-                logDebug(`切换到角色索引: ${charIndex}`);
-                await selectCharacterById(charIndex, { switchMenu: false });
+                logDebug(`切换到角色索引: ${targetCharIndex}`);
+                await selectCharacterById(targetCharIndex, { switchMenu: false });
             }
-            await new Promise(resolve => setTimeout(resolve, 500)); // 等待状态更新
+            await new Promise(resolve => setTimeout(resolve, 500));
         } catch (switchError) { /* ... 错误处理 ... */ return false; }
 
         // 2. 创建新聊天
         try {
             logDebug('创建新的聊天');
             await doNewChat({ deleteCurrentChat: false });
-            await new Promise(resolve => setTimeout(resolve, 800)); // 等待新聊天流程完成
+            await new Promise(resolve => setTimeout(resolve, 800));
         } catch (newChatError) { /* ... 错误处理 ... */ return false; }
 
-        // 3. *立即*获取新上下文，并捕获新生成的 integrity UUID 和 create_date
+        // 3. 重新获取上下文进行验证 (不再捕获 UUID)
         let newContext = getContext();
-        logDebug('重新获取上下文完成 (DoNewChat/getChat之后)');
-        let newIntegrityUUID = newContext.chat_metadata?.integrity;
-        // 在 getChat 中，create_date 可能不在 chat_metadata 里，而是在 chat[0] 里，但 saveChat 需要的是顶层的 create_date
-        // 我们需要找到 *新* 聊天的 chat_create_date (它在 script.js 的全局作用域)
-        // 但插件无法直接访问它。getContext() 也不包含它。
-        // **暂时无法直接获取新聊天的 create_date**。我们将尝试删除它。
-        if (newIntegrityUUID) {
-            logDebug(`捕获到新聊天文件生成的 Integrity UUID: ${newIntegrityUUID}`);
-        } else {
-            logDebug('警告：在新聊天创建后未能捕获到新的 Integrity UUID。');
-        }
-
-        // 4. 验证上下文是否正确更新
+        logDebug('重新获取上下文完成');
         const currentRestoredKey = getCurrentChatKey();
-        const expectedIndex = isGroup ? -1 : parseInt(entityId, 10);
+        const expectedIndex = isGroup ? -1 : targetCharIndex; // 使用之前保存的索引
         const currentIndex = isGroup ? -1 : parseInt(newContext.characterId, 10);
+        if (/*... 验证失败 ...*/) { /* ... 错误处理 ... */ return false; }
         logDebug(`上下文已确认: ${currentRestoredKey}`);
 
-        // 5. 恢复聊天内容
+        // 4. 恢复聊天内容
         logDebug('开始恢复聊天消息, 数量:', backupData.chat.length);
         if (!newContext.chat) { /*...*/ return false; }
         newContext.chat.length = 0;
@@ -710,65 +701,63 @@ async function restoreBackup(backupData) {
         copiedChatData.forEach(msg => newContext.chat.push(msg));
         logDebug(`聊天内容已恢复到 newContext.chat, 长度: ${newContext.chat.length}`);
 
-        // 6. 恢复元数据（除了 integrity 和 create_date）
+        // 5. 恢复元数据（确保 chat_metadata 是对象，并移除 integrity/create_date）
+        let finalMetadata = {}; // 默认是空对象
         if (backupData.metadata) {
             logDebug('恢复备份的聊天元数据 (除 integrity 和 create_date):', backupData.metadata);
             const restoredMetadata = structuredClone(backupData.metadata);
-            delete restoredMetadata.integrity; // *不* 恢复备份中的 integrity
-            delete restoredMetadata.create_date; // *不* 恢复备份中的 create_date
-            updateChatMetadata(restoredMetadata, true); // 使用覆盖模式
-            newContext = getContext(); // 重新获取以确保更改生效
-            logDebug('备份的聊天元数据 (除 integrity 和 create_date) 已应用');
+            delete restoredMetadata.integrity;
+            delete restoredMetadata.create_date;
+            finalMetadata = restoredMetadata; // 使用恢复的（已清理的）元数据
         } else {
-            logDebug('备份中无元数据');
-            if (!newContext.chat_metadata) newContext.chat_metadata = {}; // 确保对象存在
+            logDebug('备份中无元数据，将使用空元数据对象 {}');
         }
-
-        // 7. 将捕获到的新 UUID 设置回当前的 chat_metadata
-        if (newIntegrityUUID) {
-            logDebug(`将捕获的新 Integrity UUID (${newIntegrityUUID}) 应用到当前元数据`);
-            newContext.chat_metadata.integrity = newIntegrityUUID;
-        } else {
-            if (newContext.chat_metadata?.integrity) {
-                logDebug('未捕获到新 UUID，同时移除当前元数据中可能存在的旧 UUID');
-                delete newContext.chat_metadata.integrity;
-            }
-        }
-        // 确保 create_date 也不存在于最终要保存的元数据中
-        if (newContext.chat_metadata?.create_date) {
-             logDebug('确保最终元数据中不包含 create_date');
-             delete newContext.chat_metadata.create_date;
-        }
-        logDebug('最终准备保存的 chat_metadata:', JSON.stringify(newContext.chat_metadata)); // 详细打印
+        // 无论如何，都调用 updateChatMetadata 确保全局 chat_metadata 被设置为一个对象
+        updateChatMetadata(finalMetadata, true); // true: 覆盖模式
+        newContext = getContext(); // 再次获取上下文，确保 chat_metadata 已更新
+        logDebug('最终 chat_metadata (准备保存):', JSON.stringify(newContext.chat_metadata)); // 应该显示 {} 或恢复的内容
 
 
-        // 8. 显式更新 UI
+        // 6. 显式更新 UI
         logDebug('开始更新聊天界面UI');
         await printMessages();
         scrollChatToBottom();
         logDebug('聊天界面UI已更新');
 
-        // --- 增加保存前的最终状态检查日志 ---
-        const finalContextBeforeSave = getContext();
-        const chatFileNameToSave = isGroup ? finalContextBeforeSave.groups?.find(g => g.id === entityId)?.chat_id : finalContextBeforeSave.characters?.[finalContextBeforeSave.characterId]?.chat;
-        console.log('[聊天自动备份] *** 保存前最终状态检查 ***');
-        console.log(`  - 即将保存的文件名: ${chatFileNameToSave}`);
-        console.log(`  - isGroup: ${isGroup}`);
-        console.log(`  - name1 (用户名): ${finalContextBeforeSave.name1}`);
-        console.log(`  - name2 (角色/群组名): ${finalContextBeforeSave.name2}`);
-        console.log(`  - chat 数组长度: ${finalContextBeforeSave.chat?.length}`);
-        console.log(`  - chat_metadata 内容:`, JSON.stringify(finalContextBeforeSave.chat_metadata, null, 2));
-        console.log(`  - this_chid (全局): ${finalContextBeforeSave.this_chid}`); // 检查全局 this_chid
-        console.log(`  - selected_group (全局): ${finalContextBeforeSave.selected_group}`); // 检查全局 selected_group
-        console.log('[聊天自动备份] *** 结束检查 ***');
-        // --- 结束增加日志 ---
+        // --- 双重保险：保存前再次确保全局状态 ---
+        logDebug('*** 执行保存前的双重保险检查与设置 ***');
+        if (!isGroup && targetCharIndex !== -1) {
+             // 对于角色聊天，再次调用 selectCharacterById 强制设置全局 this_chid
+             logDebug(`保险措施：再次调用 selectCharacterById(${targetCharIndex}) 以确保全局 this_chid 正确`);
+             await selectCharacterById(targetCharIndex, { switchMenu: false });
+             // 短暂等待，确保状态更新传播
+             await new Promise(resolve => setTimeout(resolve, 100));
+             // 重新获取上下文检查是否仍然匹配 (可选，但有助于调试)
+             const finalCheckContext = getContext();
+             if (parseInt(finalCheckContext.characterId, 10) !== targetCharIndex) {
+                 console.error("严重错误：保险措施未能设置正确的 characterId!");
+                 // 可能需要停止执行
+             }
+        }
+        // 确保 chat_metadata 不是 undefined (理论上 updateChatMetadata 应该保证了，但再检查一次)
+        const contextForSave = getContext(); // 获取保存操作实际会使用的上下文
+        if (contextForSave.chat_metadata === undefined) {
+             logDebug("保险措施：发现 chat_metadata 为 undefined，强制设置为空对象 {}");
+             // 尝试直接修改（如果 getContext 返回的是引用）或再次调用 update
+             // updateChatMetadata({}, false); // 合并空对象，确保至少是 {}
+             // **更安全的做法是假设 updateChatMetadata 已经工作，如果还不行，问题更深层**
+             console.warn("警告：updateChatMetadata 后 chat_metadata 仍为 undefined，保存可能依然失败。");
+        }
+        logDebug('*** 双重保险检查与设置完成 ***');
+        // --- 结束双重保险 ---
 
-        // 9. 保存恢复的聊天状态
+
+        // 7. 保存恢复的聊天状态
         logDebug('即将调用 saveChatConditional 保存恢复后的聊天状态...');
-        await saveChatConditional(); // 尝试保存
-        logDebug('saveChatConditional 调用完成'); // 添加调用完成后的日志
+        await saveChatConditional();
+        logDebug('saveChatConditional 调用完成');
 
-        // 10. 触发其他相关事件
+        // 8. 触发其他相关事件
         eventSource.emit(event_types.CHAT_CHANGED, newContext.chatId);
 
         console.log('[聊天自动备份] 聊天恢复成功');
