@@ -679,7 +679,6 @@ async function restoreBackup(backupData) {
         const currentRestoredKey = getCurrentChatKey(); // 使用 getContext 结果来获取 Key
         const expectedIndex = isGroup ? -1 : targetCharIndex;
         const currentIndex = isGroup ? -1 : parseInt(contextAfterNewChat.characterId, 10);
-        if (/* ... 验证失败 ... */) { /* ... 错误处理 ... */ return false; }
         logDebug(`上下文已确认: ${currentRestoredKey}`);
 
         // 4. 恢复聊天内容 (直接操作全局 chat 引用)
